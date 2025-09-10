@@ -11,7 +11,6 @@ from .security import verify_api_key, verify_admin_key, get_current_user, api_us
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
 
-# Environment-based configuration
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 ENABLE_DOCS = os.getenv("ENABLE_DOCS", "true").lower() == "true"
 
