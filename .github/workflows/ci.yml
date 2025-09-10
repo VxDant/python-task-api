@@ -91,43 +91,52 @@ jobs:
 
   build-and-deploy:
     if: github.ref == 'refs/heads/main'
-    needs: [test]
+    needs: [ test ]
     runs-on: ubuntu-latest
 
+    env:
+      REGISTRY: us-central1-docker.pkg.dev
+      REPOSITORY: task-management-repo
+
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    # Use the newer auth action instead of setup-gcloud
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
-      with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # Set up Cloud SDK
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
 
-    # Configure Docker authentication - CRITICAL STEP
-    - name: Configure Docker for GCR
-      run: |
-        gcloud auth configure-docker gcr.io --quiet
+      # Create Artifact Registry repository if it doesn't exist
+      - name: Create Artifact Registry Repository
+        run: |
+          gcloud artifacts repositories create $REPOSITORY \
+            --repository-format=docker \
+            --location=us-central1 \
+            --description="Task Management API Repository" || echo "Repository already exists"
 
-    - name: Build Docker image
-      run: |
-        docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/$SERVICE_NAME:$GITHUB_SHA .
-        docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/$SERVICE_NAME:latest .
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker $REGISTRY --quiet
 
-    - name: Push to Container Registry
-      run: |
-        docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/$SERVICE_NAME:$GITHUB_SHA
-        docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/$SERVICE_NAME:latest
+      - name: Build Docker Image
+        run: |
+          docker build -t $REGISTRY/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE_NAME:$GITHUB_SHA .
+          docker build -t $REGISTRY/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE_NAME:latest .
 
-    - name: Deploy to Cloud Run
-      run: |
-        gcloud run deploy $SERVICE_NAME \
-          --image gcr.io/$PROJECT_ID/$SERVICE_NAME:$GITHUB_SHA \
-          --platform managed \
-          --region $REGION \
+      - name: Push to Artifact Registry
+        run: |
+          docker push $REGISTRY/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE_NAME:$GITHUB_SHA
+          docker push $REGISTRY/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE_NAME:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy $SERVICE_NAME \
+            --image $REGISTRY/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$SERVICE_NAME:$GITHUB_SHA \
+            --platform managed \
+            --region $REGION \
           --memory 512Mi \
           --cpu 1 \
           --min-instances 0 \
@@ -136,19 +145,19 @@ jobs:
           --no-allow-unauthenticated \
           --set-env-vars="ENVIRONMENT=production,ENABLE_DOCS=true,DEMO_API_KEY=${{ secrets.DEMO_API_KEY }},CICD_API_KEY=${{ secrets.CICD_API_KEY }},ADMIN_API_KEY=${{ secrets.ADMIN_API_KEY }}"
 
-    - name: Configure IAM Access
-      run: |
-        gcloud run services add-iam-policy-binding $SERVICE_NAME \
-          --member="user:${{ secrets.YOUR_EMAIL }}" \
-          --role="roles/run.invoker" \
-          --region=$REGION
+      - name: Configure IAM Access
+        run: |
+          gcloud run services add-iam-policy-binding $SERVICE_NAME \
+            --member="user:${{ secrets.YOUR_EMAIL }}" \
+            --role="roles/run.invoker" \
+            --region=$REGION
 
-    - name: Get Service URL and Test
-      run: |
-        SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format='value(status.url)')
-        echo "🔗 Service URL: $SERVICE_URL"
-        echo "📚 Swagger UI: $SERVICE_URL/docs"
-        
-        # Simple health check
-        sleep 10
-        curl -f "$SERVICE_URL/health" || echo "⚠️ Health check failed, but deployment completed"
+      - name: Get Service URL and Test
+        run: |
+          SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format='value(status.url)')
+          echo "🔗 Service URL: $SERVICE_URL"
+          echo "📚 Swagger UI: $SERVICE_URL/docs"
+          
+          # Simple health check
+          sleep 10
+          curl -f "$SERVICE_URL/health" || echo "⚠️ Health check failed, but deployment completed"
